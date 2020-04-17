@@ -282,7 +282,7 @@ static GLogColor SeverityToColor(LogSeverity severity) {
   GLogColor color = COLOR_DEFAULT;
   switch (severity) {
   case GLOG_INFO:
-    color = COLOR_DEFAULT;
+    color = COLOR_GREEN;
     break;
   case GLOG_WARNING:
     color = COLOR_YELLOW;
@@ -378,7 +378,7 @@ int64 LogMessage::num_messages_[NUM_SEVERITIES] = {0, 0, 0, 0};
 static bool stop_writing = false;
 
 const char*const LogSeverityNames[NUM_SEVERITIES] = {
-  "INFO", "WARNING", "ERROR", "FATAL"
+  "INFO",  "WARNING",  "ERROR",  "FATAL"
 };
 
 // Has the user called SetExitOnDFatal(true)?
@@ -411,7 +411,7 @@ class LogFileObject : public base::Logger {
   void SetBasename(const char* basename);
   void SetExtension(const char* ext);
   void SetSymlinkBasename(const char* symlink_basename);
-
+  uint32 get_file_size();
   // Normal flushing routine
   virtual void Flush();
 
@@ -439,6 +439,7 @@ class LogFileObject : public base::Logger {
   LogSeverity severity_;
   uint32 bytes_since_flush_;
   uint32 file_length_;
+  uint32 nlength_;
   unsigned int rollover_attempt_;
   int64 next_flush_time_;         // cycle count at which to flush log
 
@@ -840,10 +841,12 @@ LogFileObject::LogFileObject(LogSeverity severity,
     severity_(severity),
     bytes_since_flush_(0),
     file_length_(0),
+    nlength_(0),
     rollover_attempt_(kRolloverAttemptFrequency-1),
     next_flush_time_(0) {
   assert(severity >= 0);
   assert(severity < NUM_SEVERITIES);
+  get_file_size();
 }
 
 LogFileObject::~LogFileObject() {
@@ -904,10 +907,12 @@ void LogFileObject::FlushUnlocked(){
 
 bool LogFileObject::CreateLogfile(const string& time_pid_string) {
   string string_filename = base_filename_+filename_extension_+
-                           time_pid_string;
+                           time_pid_string + LogSeverityNames[severity_] + "_new";
   const char* filename = string_filename.c_str();
-  int fd = open(filename, O_WRONLY | O_CREAT | O_EXCL, FLAGS_logfile_mode);
+  //if (severity_ == 1) return false;
+  int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, FLAGS_logfile_mode);
   if (fd == -1) return false;
+
 #ifdef HAVE_FCNTL
   // Mark the file close-on-exec. We don't really care if this fails
   fcntl(fd, F_SETFD, FD_CLOEXEC);
@@ -942,24 +947,62 @@ bool LogFileObject::CreateLogfile(const string& time_pid_string) {
     // Make the symlink be relative (in the same dir) so that if the
     // entire log directory gets relocated the link is still valid.
     const char *linkdest = slash ? (slash + 1) : filename;
-    if (symlink(linkdest, linkpath.c_str()) != 0) {
-      // silently ignore failures
-    }
+//    if (symlink(linkdest, linkpath.c_str()) != 0) {
+//      // silently ignore failures
+//    }
 
     // Make an additional link to the log file in a place specified by
     // FLAGS_log_link, if indicated
     if (!FLAGS_log_link.empty()) {
       linkpath = FLAGS_log_link + "/" + linkname;
       unlink(linkpath.c_str());                  // delete old one if it exists
-      if (symlink(filename, linkpath.c_str()) != 0) {
-        // silently ignore failures
-      }
+//      if (symlink(filename, linkpath.c_str()) != 0) {
+//        // silently ignore failures
+//      }
     }
 #endif
   }
 
   return true;  // Everything worked
 }
+
+uint32 LogFileObject::get_file_size()
+{
+    const string& time_pid_string = "logHero_";
+    string string_filename = base_filename_+filename_extension_+
+                             time_pid_string + LogSeverityNames[severity_] + "_new";
+    int fd = open(string_filename.c_str(), O_RDONLY, FLAGS_logfile_mode);
+    if (fd == -1) return false;
+    FILE * pFile_ = fdopen(fd, "r");  // Make a FILE*.
+    if (pFile_ == NULL) {  // Man, we're screwed!
+        close(fd);
+        return 0;
+    }
+    fseek(pFile_, SEEK_SET, SEEK_END );
+    nlength_ = ftell(pFile_);
+    fprintf(stderr, "AAAAAAAAAAAAA! %d MaxSize = %d \n", nlength_, MaxLogSize());
+    if(nlength_ >= MaxLogSize() * 1024 * 1024)
+    {
+        string string_filename_old = base_filename_+filename_extension_+
+                                 time_pid_string + LogSeverityNames[severity_] + "_old";
+        remove(string_filename_old.c_str());
+        rename(string_filename.c_str(), string_filename_old.c_str());
+        if (!CreateLogfile(time_pid_string)) {
+            perror("Could not create log file");
+            fprintf(stderr, "COULD NOT CREATE LOGFILE '%s'!\n",
+                    time_pid_string.c_str());
+        }
+        nlength_ = 0;
+    }
+    file_length_ = nlength_;
+
+    if (pFile_ != NULL) {
+        fclose(pFile_);
+        pFile_ = NULL;
+    }
+    return nlength_;
+}
+
 
 void LogFileObject::Write(bool force_flush,
                           time_t timestamp,
@@ -972,12 +1015,23 @@ void LogFileObject::Write(bool force_flush,
     return;
   }
 
-  if (static_cast<int>(file_length_ >> 20) >= MaxLogSize() ||
-      PidHasChanged()) {
+  if (file_length_ >= MaxLogSize() * 1024 * 1024) {
     if (file_ != NULL) fclose(file_);
     file_ = NULL;
     file_length_ = bytes_since_flush_ = 0;
     rollover_attempt_ = kRolloverAttemptFrequency-1;
+
+      string string_filename = base_filename_+filename_extension_+
+                               "Hero_" + LogSeverityNames[severity_] + "_new";
+      string string_filename_old = base_filename_+filename_extension_+
+                                "Hero_" + LogSeverityNames[severity_] + "_old";
+      remove(string_filename_old.c_str());
+      rename(string_filename.c_str(), string_filename_old.c_str());
+      if (!CreateLogfile("Hero_")) {
+          perror("Could not create log file");
+          return;
+      }
+      file_length_ = 0;
   }
 
   // If there's no destination file, make one before outputting
@@ -994,15 +1048,7 @@ void LogFileObject::Write(bool force_flush,
     // The logfile's filename will have the date/time & pid in it
     ostringstream time_pid_stream;
     time_pid_stream.fill('0');
-    time_pid_stream << 1900+tm_time.tm_year
-                    << setw(2) << 1+tm_time.tm_mon
-                    << setw(2) << tm_time.tm_mday
-                    << '-'
-                    << setw(2) << tm_time.tm_hour
-                    << setw(2) << tm_time.tm_min
-                    << setw(2) << tm_time.tm_sec
-                    << '.'
-                    << GetMainThreadPid();
+    time_pid_stream << "Hero_";
     const string& time_pid_string = time_pid_stream.str();
 
     if (base_filename_selected_) {
@@ -1064,27 +1110,28 @@ void LogFileObject::Write(bool force_flush,
     }
 
     // Write a header message into the log file
-    ostringstream file_header_stream;
-    file_header_stream.fill('0');
-    file_header_stream << "Log file created at: "
-                       << 1900+tm_time.tm_year << '/'
-                       << setw(2) << 1+tm_time.tm_mon << '/'
-                       << setw(2) << tm_time.tm_mday
-                       << ' '
-                       << setw(2) << tm_time.tm_hour << ':'
-                       << setw(2) << tm_time.tm_min << ':'
-                       << setw(2) << tm_time.tm_sec << '\n'
-                       << "Running on machine: "
-                       << LogDestination::hostname() << '\n'
-                       << "Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu "
-                       << "threadid file:line] msg" << '\n';
-    const string& file_header_string = file_header_stream.str();
-
-    const int header_len = file_header_string.size();
-    fwrite(file_header_string.data(), 1, header_len, file_);
-    file_length_ += header_len;
-    bytes_since_flush_ += header_len;
+//    ostringstream file_header_stream;
+//    file_header_stream.fill('0');
+//    file_header_stream << "Log file created at: "
+//                       << 1900+tm_time.tm_year << '/'
+//                       << setw(2) << 1+tm_time.tm_mon << '/'
+//                       << setw(2) << tm_time.tm_mday
+//                       << ' '
+//                       << setw(2) << tm_time.tm_hour << ':'
+//                       << setw(2) << tm_time.tm_min << ':'
+//                       << setw(2) << tm_time.tm_sec << '\n'
+//                       << "Running on machine: "
+//                       << LogDestination::hostname() << '\n'
+//                       << "Log line format: [IWEF]mmdd hh:mm:ss.uuuuuu "
+//                       << "threadid file:line] msg" << '\n';
+//    const string& file_header_string = file_header_stream.str();
+//
+//    const int header_len = file_header_string.size();
+//    fwrite(file_header_string.data(), 1, header_len, file_);
+//    file_length_ += header_len;
+//    bytes_since_flush_ += header_len;
   }
+
 
   // Write to LOG file
   if ( !stop_writing ) {
