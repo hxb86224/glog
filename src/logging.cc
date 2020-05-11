@@ -907,7 +907,7 @@ void LogFileObject::FlushUnlocked(){
 
 bool LogFileObject::CreateLogfile(const string& time_pid_string) {
   string string_filename = base_filename_+filename_extension_+
-                           time_pid_string + LogSeverityNames[severity_] + "_new";
+                           time_pid_string + LogSeverityNames[severity_] + "_new.log";
   const char* filename = string_filename.c_str();
   //if (severity_ == 1) return false;
   int fd = open(filename, O_WRONLY | O_CREAT | O_APPEND, FLAGS_logfile_mode);
@@ -970,7 +970,7 @@ uint32 LogFileObject::get_file_size()
 {
     const string& time_pid_string = "logHero_";
     string string_filename = base_filename_+filename_extension_+
-                             time_pid_string + LogSeverityNames[severity_] + "_new";
+                             time_pid_string + LogSeverityNames[severity_] + "_new.log";
     int fd = open(string_filename.c_str(), O_RDONLY, FLAGS_logfile_mode);
     if (fd == -1) return false;
     FILE * pFile_ = fdopen(fd, "r");  // Make a FILE*.
@@ -980,11 +980,10 @@ uint32 LogFileObject::get_file_size()
     }
     fseek(pFile_, SEEK_SET, SEEK_END );
     nlength_ = ftell(pFile_);
-    fprintf(stderr, "AAAAAAAAAAAAA! %d MaxSize = %d \n", nlength_, MaxLogSize());
     if(nlength_ >= MaxLogSize() * 1024 * 1024)
     {
         string string_filename_old = base_filename_+filename_extension_+
-                                 time_pid_string + LogSeverityNames[severity_] + "_old";
+                                 time_pid_string + LogSeverityNames[severity_] + "_old.log";
         remove(string_filename_old.c_str());
         rename(string_filename.c_str(), string_filename_old.c_str());
         if (!CreateLogfile(time_pid_string)) {
@@ -1022,9 +1021,9 @@ void LogFileObject::Write(bool force_flush,
     rollover_attempt_ = kRolloverAttemptFrequency-1;
 
       string string_filename = base_filename_+filename_extension_+
-                               "Hero_" + LogSeverityNames[severity_] + "_new";
+                               "Hero_" + LogSeverityNames[severity_] + "_new.log";
       string string_filename_old = base_filename_+filename_extension_+
-                                "Hero_" + LogSeverityNames[severity_] + "_old";
+                                "Hero_" + LogSeverityNames[severity_] + "_old.log";
       remove(string_filename_old.c_str());
       rename(string_filename.c_str(), string_filename_old.c_str());
       if (!CreateLogfile("Hero_")) {
